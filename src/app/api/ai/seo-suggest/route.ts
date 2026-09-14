@@ -6,6 +6,7 @@
 // parseable JSON, we surface the raw text under { raw } with a 200 so the
 // client can degrade gracefully.
 
+import { extractJsonObject, stripFences } from "@/lib/json-utils";
 import { llmChat } from "@/lib/llm";
 import type { SeoConfig } from "@/lib/types";
 
@@ -45,43 +46,6 @@ Hard rules:
 - Do NOT wrap the JSON in another object.
 - All string values must be properly escaped JSON strings.
 - The "tips" array must contain between 3 and 5 items, each a short string.`;
-
-function stripFences(raw: string): string {
-  const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  return match ? match[1].trim() : raw.trim();
-}
-
-/**
- * Find the largest balanced JSON object (`{ ... }`) inside `text`. Lets us
- * recover the JSON even when the model prefixes it with prose.
- */
-function extractJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");

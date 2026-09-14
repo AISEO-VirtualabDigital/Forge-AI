@@ -9,6 +9,7 @@ import type {
   EditMode,
   PreviewDevice,
   SeoConfig,
+  WordPressConfig,
 } from "./types";
 import { createBlock, defaultBlocks } from "./blocks";
 import { DEFAULT_SEO } from "./seo";
@@ -27,6 +28,9 @@ interface BuilderState {
   chatOpen: boolean;
   messages: ChatMessage[];
   chatLoading: boolean;
+  // wordpress
+  wordpress: WordPressConfig;
+  wpConnected: boolean;
 
   // actions
   setProjectName: (n: string) => void;
@@ -49,6 +53,9 @@ interface BuilderState {
   setChatLoading: (b: boolean) => void;
   addMessage: (m: ChatMessage) => void;
   clearMessages: () => void;
+
+  setWordPress: (patch: Partial<WordPressConfig>) => void;
+  setWpConnected: (b: boolean) => void;
 }
 
 function genId() {
@@ -77,6 +84,9 @@ export const useBuilder = create<BuilderState>()(
         },
       ],
       chatLoading: false,
+
+      wordpress: { siteUrl: "", username: "", appPassword: "" },
+      wpConnected: false,
 
       setProjectName: (n) => set({ projectName: n }),
       setMode: (m) => set({ mode: m }),
@@ -166,6 +176,13 @@ export const useBuilder = create<BuilderState>()(
             },
           ],
         }),
+
+      setWordPress: (patch) =>
+        set((s) => ({
+          wordpress: { ...s.wordpress, ...patch },
+          wpConnected: patch.siteUrl !== undefined ? false : s.wpConnected,
+        })),
+      setWpConnected: (b) => set({ wpConnected: b }),
     }),
     {
       name: "forge-builder-v1",
@@ -175,6 +192,7 @@ export const useBuilder = create<BuilderState>()(
         customCode: s.customCode,
         seo: s.seo,
         mode: s.mode,
+        wordpress: s.wordpress,
       }),
     },
   ),

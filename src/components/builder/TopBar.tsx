@@ -13,6 +13,7 @@ import {
   Download,
   RotateCcw,
   Github,
+  Plug,
 } from "lucide-react";
 import { useBuilder } from "@/lib/store";
 import type { EditMode, PreviewDevice } from "@/lib/types";
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { blocksToHtml } from "@/lib/ai-context";
 import { buildRobotsTxt, buildSitemapXml } from "@/lib/seo";
+import { WordPressDialog } from "./WordPressDialog";
 import { toast } from "sonner";
 
 const MODES: { value: EditMode; label: string; icon: React.ElementType; desc: string }[] = [
@@ -72,6 +74,8 @@ export function TopBar() {
   const seo = useBuilder((s) => s.seo);
   const customCode = useBuilder((s) => s.customCode);
   const resetProject = useBuilder((s) => s.resetProject);
+  const wpConnected = useBuilder((s) => s.wpConnected);
+  const [wpOpen, setWpOpen] = React.useState(false);
 
   function handleExport(kind: "html" | "seo-json" | "robots" | "sitemap") {
     const name = projectName.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() || "site";
@@ -184,6 +188,20 @@ export function TopBar() {
         )}
       </Button>
 
+      {/* WordPress connector */}
+      <Button
+        variant={wpConnected ? "default" : "outline"}
+        size="sm"
+        className="h-8"
+        onClick={() => setWpOpen(true)}
+      >
+        <Plug className="mr-1.5 h-3.5 w-3.5" />
+        <span className="hidden sm:inline">WordPress</span>
+        {wpConnected ? (
+          <span className="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+        ) : null}
+      </Button>
+
       {/* Export menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -222,6 +240,8 @@ export function TopBar() {
       >
         <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
       </Button>
+
+      <WordPressDialog open={wpOpen} onOpenChange={setWpOpen} />
     </header>
   );
 }

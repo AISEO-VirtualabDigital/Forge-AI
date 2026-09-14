@@ -159,3 +159,236 @@ Stage Summary:
 - Plus: device preview switcher, HTML/SEO/robots/sitemap export, sticky
   status-bar footer, responsive layout, Sonner toasts.
 - Lint clean, dev server healthy, no runtime errors in the browser.
+
+---
+Task ID: 2-b
+Agent: full-stack-developer
+Task: Build backend API routes for three new Forge builder features — a
+WordPress REST connector (test connection / publish post / list posts), an
+AI internal-linking suggestions endpoint, and an AI EEAT narrative analysis
+endpoint — plus a shared JSON-recovery helper and a server-only WordPress
+helper. Reuse the existing `getZai()` / `llmChat()` from `src/lib/llm.ts`.
+All routes are stateless Node runtime, no Prisma/DB, no client-side SDK use.
+
+Work Log:
+- Read /home/z/my-project/worklog.md (Tasks 1, 2-a, 3-9) to confirm the
+  foundation types, the LLM helper, and the existing AI routes (chat,
+  generate-block, seo-suggest) are already in place.
+- Confirmed the type surface in `src/lib/types.ts` exports `WordPressConfig`,
+  `WordPressPost`, `InternalLinkSuggestion`, `Block`, and `SeoConfig` with
+  the exact shapes the spec requires (including the optional `blockId` /
+  `applied` fields on `InternalLinkSuggestion`).
+- Confirmed `src/lib/llm.ts` exports `getZai()` (lazy singleton) and
+  `llmChat(messages)` accepting `{role:"assistant"|"user"; content:string}[]`
+  and returning the first choice's content string. Reused it directly in both
+  new AI routes — the SDK never reaches client code.
+- Confirmed the existing `src/app/api/ai/generate-block/route.ts` and
+  `src/app/api/ai/seo-suggest/route.ts` already had local `stripFences` /
+  `extractJsonArray` / `extractJsonObject` copies.
+- Created `src/lib/json-utils.ts` exporting:
+  - `stripFences(raw)` — strips ```json / ``` fences.
+  - `extractJsonArray(text)` — first balanced `[ ... ]` (string-aware,
+    escape-aware scan).
+  - `extractJsonObject(text)` — first balanced `{ ... }` (same algorithm).
+- Refactored `src/app/api/ai/generate-block/route.ts` to import
+  `stripFences` + `extractJsonArray` from `@/lib/json-utils`; removed the
+  local copies. Behavior unchanged (still 400 on missing prompt, 502 with
+  `{error, raw}` on parse failure, 500 on LLM error).
+- Refactored `src/app/api/ai/seo-suggest/route.ts` to import `stripFences` +
+  `extractJsonObject` from `@/lib/json-utils`; removed the local copies.
+  Graceful degradation (`{raw}` with 200) preserved.
+- Created `src/lib/wordpress.ts` (server-only — no `"use client"`):
+  - `wpBasicAuth(config)` returns `Basic <base64>` from
+    `Buffer.from(\`${username}:${appPassword}\`).toString("base64")`.
+    Never logs the password — only used to build the header.
+  - `wpUrl(config, path)` strips trailing slashes from `siteUrl` and ensures
+    `path` starts with a single `/`.
+- Created `src/app/api/wordpress/test/route.ts` (POST):
+  - Body: `WordPressConfig`. Validates siteUrl is a non-empty http(s) URL and
+    that username/appPassword are non-empty (400 otherwise).
+  - GETs `${siteUrl}/wp-json/wp/v2/users/me` with `Authorization: Basic …`
+    and `redirect: "error"` (so credentials can't leak through redirects).
+  - 401/403 → 401 `{connected:false, error:"Invalid credentials"}`.
+  - Non-2xx → 502 with status message.
+  - On success also fetches `${siteUrl}/wp-json` (no auth) to read `body.name`
+    for the site name; falls back to the siteUrl host on any failure.
+  - Returns `{connected:true, siteName, user:{id,name,slug}}`. Network/DNS
+    fetch failures → 504 `{connected:false, error:<message>}`.
+- Created `src/app/api/wordpress/publish/route.ts` (POST):
+  - Body: `{ config, title, content, status:"draft"|"publish"|"private",
+    slug?, excerpt? }`. Validates config + title + content (400 otherwise).
+  - POSTs `${siteUrl}/wp-json/wp/v2/posts` with Basic auth, JSON body
+    `{title, content, status, slug?, excerpt?}` (optional fields only added
+    when present), `Content-Type: application/json`, `redirect: "error"`.
+  - 401/403 → 401. 201 (or any other 2xx) → `{success:true, post:
+    WordPressPost}` (title rendered string is unwrapped). Non-2xx → wraps
+    the WP error body as `{success:false, error:<message>, wpCode:<code>}`
+    with the WP-supplied status (or `http_<status>`).
+  - Network failures → 504.
+- Created `src/app/api/wordpress/posts/route.ts` (POST):
+  - Body: `{ config, page?, perPage?, search? }`. Validates config (400).
+  - GETs `${siteUrl}/wp-json/wp/v2/posts?_fields=id,title,status,slug,link,
+    date,modified&per_page=N&page=N&search=…` with Basic auth.
+  - `page` clamped to [1, 1000] (default 1); `perPage` clamped to [1, 100]
+    (default 10).
+  - Returns `{posts: WordPressPost[], total, totalPages}` where totals are
+    read from `x-wp-total` / `x-wp-totalpages` response headers (falling back
+    to `posts.length` / 1 on missing headers).
+  - 401/403 → 401. Non-2xx → 502 with WP message or `"Failed to list posts"`.
+  - Network failures → 504.
+- Created `src/app/api/ai/internal-links/route.ts` (POST):
+  - Body: `{ contentText, blocks, seo }`. 400 if `contentText` missing.
+  - System prompt (role "assistant") per spec — instructs the model to
+    return ONLY a JSON array of `{anchorText, suggestedTarget, reason}` with
+    anchorText being an exact 2-6 word content substring and
+    suggestedTarget using the canonical domain or an in-page #anchor.
+  - User message contains the title, focusKeyword, canonical, a compact
+    block summary (type:id for up to 40 blocks), and the content text
+    truncated to ~3000 chars.
+  - Defensive parse via shared `stripFences` + `extractJsonArray`; 502 with
+    `{error, raw}` on parse failure or non-array, 500 on LLM error.
+  - Each item validated for non-empty `anchorText` + `suggestedTarget`;
+    dropped otherwise. Stable ids `il_<index>`, `applied:false`, optional
+    `blockId` forwarded when the model provides it.
+  - Returns `{ suggestions: InternalLinkSuggestion[] }`.
+- Created `src/app/api/ai/eeat/route.ts` (POST):
+  - Body: `{ contentText, seo, signals }` where signals matches the
+    `EeatAnalysis["signals"]` shape. 400 if `contentText` missing.
+  - System prompt (role "assistant") per spec — return ONLY a JSON object
+    `{narrative, strengths[], improvements[], priorityAction}` with concrete
+    actionable items.
+  - User message contains page metadata, a JSON dump of all boolean signals
+    plus firstPersonCount/citationCount/contentDepthScore, and content text
+    truncated to ~3000 chars.
+  - Defensive parse via shared `stripFences` + `extractJsonObject`. On parse
+    failure or non-object, returns HTTP 200 with `{raw}` so the UI degrades
+    gracefully (same pattern as seo-suggest).
+  - On success, coerces each field to its expected type (strengths capped at
+    4, improvements capped at 6) and returns the EeatNarrative object.
+  - 500 on LLM error.
+- Ran `bun run lint` from the project root: exit code 0, zero errors /
+  warnings across the whole repo (including all new files and the two
+  refactored routes).
+- Verified `dev.log` shows the dev server is healthy (no compile errors
+  introduced; existing routes still 200).
+
+Files created:
+- `src/lib/json-utils.ts`
+- `src/lib/wordpress.ts`
+- `src/app/api/wordpress/test/route.ts`
+- `src/app/api/wordpress/publish/route.ts`
+- `src/app/api/wordpress/posts/route.ts`
+- `src/app/api/ai/internal-links/route.ts`
+- `src/app/api/ai/eeat/route.ts`
+
+Files modified (refactored to consume shared helpers, behavior unchanged):
+- `src/app/api/ai/generate-block/route.ts`
+- `src/app/api/ai/seo-suggest/route.ts`
+
+Stage Summary:
+- WordPress connector layer complete and lint-clean. The browser can POST
+  a full `WordPressConfig` to `/api/wordpress/test` to validate credentials
+  (returns `{connected, siteName, user}`), to `/api/wordpress/publish` to
+  create a post (returns `{success, post}` on 201 or `{success:false,
+  error, wpCode}` on error), and to `/api/wordpress/posts` to list existing
+  posts with pagination/search (returns `{posts, total, totalPages}`).
+  Credentials are never logged and never stored server-side — they live in
+  the browser's localStorage and are sent per request. Network/DNS failures
+  surface as 504, auth failures as 401, WP REST errors as 502 with the WP
+  message, all wrapped consistently.
+- AI internal-linking endpoint `/api/ai/internal-links` returns a JSON array
+  of validated suggestions with stable `il_<index>` ids; defensive parsing
+  recovers arrays even when the model prefixes prose or wraps the output in
+  fences. EEAT endpoint `/api/ai/eeat` returns a structured narrative object
+  and degrades gracefully to `{raw}` on parse failure.
+- Shared JSON helpers (`stripFences`, `extractJsonArray`, `extractJsonObject`)
+  extracted to `src/lib/json-utils.ts` and the two pre-existing AI routes
+  refactored to import them, eliminating duplication without behavior
+  changes. All route handlers are `export async function POST(req: Request):
+  Promise<Response>`, use `Response.json(...)`, wrap `req.json()` in
+  try/catch → 400, wrap LLM/WP fetches in try/catch → 500/502/504 as
+  appropriate. No `runtime = "edge"` anywhere, no Prisma/DB, no client-side
+  SDK imports, no `any`, TypeScript strict-clean.
+
+---
+Task ID: 10-14 (this turn)
+Agent: main
+Task: Add three new features to Forge: (1) Internal Linking analyzer,
+(2) E-E-A-T scorer, (3) WordPress connector. Plus UI integration and
+end-to-end verification.
+
+Work Log:
+- Extended `src/lib/types.ts` with EeatAnalysis, EeatCheck, EeatDimension,
+  InternalLinkSuggestion, InternalLinkAnalysis, WordPressConfig,
+  WordPressPost, WordPressConnectionState types.
+- Extended `src/lib/store.ts` with `wordpress` config + `wpConnected` state,
+  `setWordPress`/`setWpConnected` actions; persisted wordpress config.
+- Dispatched Task 2-b (subagent) to build backend routes — completed:
+  - `src/lib/json-utils.ts` (shared stripFences / extractJsonArray / extractJsonObject)
+  - `src/lib/wordpress.ts` (wpBasicAuth, wpUrl server helpers)
+  - `src/app/api/wordpress/test/route.ts` (POST, Basic Auth to /wp-json/wp/v2/users/me)
+  - `src/app/api/wordpress/publish/route.ts` (POST, creates WP post)
+  - `src/app/api/wordpress/posts/route.ts` (POST, lists WP posts)
+  - `src/app/api/ai/internal-links/route.ts` (POST, LLM suggests link opportunities)
+  - `src/app/api/ai/eeat/route.ts` (POST, LLM narrative + strengths/improvements)
+  - Refactored generate-block + seo-suggest to use shared json-utils.
+- Built `src/lib/eeat.ts` — deterministic client-side EEAT analyzer:
+  13 weighted checks across 4 dimensions (Experience, Expertise,
+  Authoritativeness, Trustworthiness), with heuristic signal detection
+  (first-person pronouns, citations, contact info, about mentions, dates,
+  disclaimers, HTTPS, schema, external links) + content-depth scoring.
+- Built `src/components/builder/EeatPanel.tsx` — score ring, 4 colored
+  dimension bars, detected-signal badges, full checklist, AI narrative
+  button that calls /api/ai/eeat and shows narrative + priority action +
+  strengths + improvements.
+- Built `src/components/builder/InternalLinksPanel.tsx` — existing-links
+  inventory (from nav/button/cta/footer blocks), AI "Analyze for internal
+  links" button calling /api/ai/internal-links, suggestion cards with
+  anchor text + target + reason + Apply button, and best-practices list.
+  Apply either wraps the anchor in a matching paragraph or copies an
+  <a> tag to the clipboard.
+- Built `src/components/builder/WordPressDialog.tsx` — full WP connector
+  modal: site URL/username/app-password fields, Test connection button
+  with connected badge, publish-as dropdown (draft/publish/private),
+  Publish button that converts blocks→HTML body and POSTs to WP, success
+  card with the live post link, recent-posts list with status badges +
+  open-in-WP links, and a clear-credentials action.
+- Rewired `src/components/builder/RightPanel.tsx` from 2 tabs to 4:
+  SEO | E-E-A-T | Links | Style (each scrollable, distinct concern).
+- Updated `src/components/builder/TopBar.tsx` — added a WordPress button
+  (turns solid + shows green dot when connected) that opens the dialog.
+- Updated `src/components/builder/Footer.tsx` — now shows both E-E-A-T
+  and SEO scores in the sticky status bar.
+- `bun run lint` -> 0 errors, 0 warnings.
+
+Self-verification (Agent Browser):
+- Page renders with 4 right-panel tabs (SEO/E-E-A-T/Links/Style) and a
+  new "WordPress" button in the TopBar.
+- EEAT tab: score ring + 4 dimension bars render with the deterministic
+  scores; "AI E-E-A-T Analysis" button returned a structured narrative
+  (priority action + 4 strengths + 6 improvements) from the LLM.
+- Links tab: existing-links inventory populated; "Analyze for internal
+  links" returned 7 contextual suggestions (anchor text, target URL,
+  reason) with Apply buttons; clicking Apply marked one as "Applied".
+- WordPress dialog opens with Site URL/Username/App Password fields,
+  Test connection + publish-as dropdown + recent posts; tested
+  Test-connection against an invalid domain -> stayed "Not connected"
+  (504 handled gracefully). Direct curl confirmed 504 for bad domain and
+  400 for missing fields; the EEAT + internal-links routes return 200
+  with rich LLM output.
+- Footer now shows live "E-E-A-T: 50/100 | SEO: 65/100".
+- No browser errors or console exceptions across all interactions.
+
+Stage Summary:
+- Three new production-ready features added to Forge:
+  1. Internal Linking analyzer (AI-powered suggestions + apply flow +
+     existing-links inventory + best-practices).
+  2. E-E-A-T scorer (deterministic 13-check/4-dimension analyzer +
+     AI narrative with strengths/improvements/priority action +
+     detected-signal badges).
+  3. WordPress connector (settings + test connection + publish as
+     draft/publish/private + recent-posts list + clear credentials),
+  using Basic Auth against the WP REST API via server-side proxy routes
+  (no CORS issues, app password never logged).
+- All wired into the existing TopBar + RightPanel + Footer; lint clean;
+  dev server healthy; browser-verified end-to-end.

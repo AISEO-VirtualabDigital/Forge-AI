@@ -5,6 +5,7 @@
 // spec: { type, props, style }.
 
 import { BLOCK_DEFINITIONS } from "@/lib/blocks";
+import { extractJsonArray, stripFences } from "@/lib/json-utils";
 import { llmChat } from "@/lib/llm";
 import type { BlockProps, BlockStyle, BlockType } from "@/lib/types";
 
@@ -54,48 +55,6 @@ Style guidelines:
 - For images, ALWAYS use a real working Unsplash photo URL (format: https://images.unsplash.com/photo-XXXX?w=1200&q=80) and a concrete descriptive alt.
 
 Output ONLY the JSON array. No prose, no markdown fences, no comments, no trailing commas. Do not wrap the array in an object.`;
-
-/**
- * Strip an optional fenced code block (```json ... ``` or ``` ... ```) and
- * return the inner text. Falls back to the original text if no fence is found.
- */
-function stripFences(raw: string): string {
-  const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  return match ? match[1].trim() : raw.trim();
-}
-
-/**
- * Find the largest balanced JSON array inside `text`. The model occasionally
- * prepends a sentence like "Here are the blocks:" before the array; this lets
- * us still recover the JSON.
- */
-function extractJsonArray(text: string): string | null {
-  const start = text.indexOf("[");
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === "\\") {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === "[") depth++;
-    else if (ch === "]") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
 
 function coerceType(value: unknown): BlockType | null {
   return typeof value === "string" && VALID_TYPES.has(value as BlockType)
