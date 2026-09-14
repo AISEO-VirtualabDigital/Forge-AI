@@ -17,6 +17,7 @@ import { CustomCodePanel } from "@/components/builder/CustomCodePanel";
 import { Preview } from "@/components/builder/Preview";
 import { Footer } from "@/components/builder/Footer";
 import { FloatingAssistant } from "@/components/ai/FloatingAssistant";
+import { OrchestrationDashboard } from "@/components/dashboard/OrchestrationDashboard";
 
 function ResizeHandle() {
   return (
@@ -71,6 +72,7 @@ export default function Home() {
 
   const mode = useBuilder((s) => s.mode);
   const showPreview = useBuilder((s) => s.showPreview);
+  const activeView = useBuilder((s) => s.activeView);
 
   if (!mounted) {
     return <BuilderSkeleton />;
@@ -81,7 +83,9 @@ export default function Home() {
       <TopBar />
 
       <main className="flex min-h-0 flex-1">
-        {showPreview ? (
+        {activeView === "dashboard" ? (
+          <OrchestrationDashboard />
+        ) : showPreview ? (
           <Preview />
         ) : mode === "code" ? (
           <CustomCodePanel />

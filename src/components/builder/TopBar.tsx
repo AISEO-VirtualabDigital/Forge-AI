@@ -14,6 +14,9 @@ import {
   RotateCcw,
   Github,
   Plug,
+  LayoutDashboard,
+  Save,
+  Loader2,
 } from "lucide-react";
 import { useBuilder } from "@/lib/store";
 import type { EditMode, PreviewDevice } from "@/lib/types";
@@ -75,7 +78,44 @@ export function TopBar() {
   const customCode = useBuilder((s) => s.customCode);
   const resetProject = useBuilder((s) => s.resetProject);
   const wpConnected = useBuilder((s) => s.wpConnected);
+  const activeView = useBuilder((s) => s.activeView);
+  const setActiveView = useBuilder((s) => s.setActiveView);
+  const serverProjectId = useBuilder((s) => s.serverProjectId);
+  const setServerProjectId = useBuilder((s) => s.setServerProjectId);
+  const setServerSyncing = useBuilder((s) => s.setServerSyncing);
+  const serverSyncing = useBuilder((s) => s.serverSyncing);
   const [wpOpen, setWpOpen] = React.useState(false);
+
+  async function saveToServer() {
+    setServerSyncing(true);
+    try {
+      if (serverProjectId) {
+        // Update existing project.
+        const res = await fetch(`/api/projects/${serverProjectId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: projectName, blocks, seo, mode, customCode }),
+        });
+        if (!res.ok) throw new Error("Save failed");
+        toast.success("Saved to server");
+      } else {
+        // Create a new server project.
+        const res = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: projectName, blocks, seo, mode, customCode }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Create failed");
+        setServerProjectId(data.project.id);
+        toast.success("Created server project");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setServerSyncing(false);
+    }
+  }
 
   function handleExport(kind: "html" | "seo-json" | "robots" | "sitemap") {
     const name = projectName.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() || "site";
@@ -100,13 +140,32 @@ export function TopBar() {
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
-      {/* Brand */}
+      {/* Brand + view switcher */}
       <div className="flex items-center gap-2">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Github className="h-4 w-4" />
         </div>
         <span className="hidden text-sm font-bold sm:inline">Forge</span>
       </div>
+
+      <Button
+        variant={activeView === "builder" ? "default" : "ghost"}
+        size="sm"
+        className="h-8 text-xs"
+        onClick={() => setActiveView("builder")}
+      >
+        <MousePointer2 className="mr-1.5 h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Builder</span>
+      </Button>
+      <Button
+        variant={activeView === "dashboard" ? "default" : "ghost"}
+        size="sm"
+        className="h-8 text-xs"
+        onClick={() => setActiveView("dashboard")}
+      >
+        <LayoutDashboard className="mr-1.5 h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Dashboard</span>
+      </Button>
 
       <div className="mx-1 h-6 w-px bg-border" />
 
@@ -169,6 +228,28 @@ export function TopBar() {
       </TooltipProvider>
 
       <div className="flex-1" />
+
+      {/* Save to server */}
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8"
+        onClick={saveToServer}
+        disabled={serverSyncing}
+        title={serverProjectId ? `Server project: ${serverProjectId}` : "Create a server project"}
+      >
+        {serverSyncing ? (
+          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Save className="mr-1.5 h-3.5 w-3.5" />
+        )}
+        <span className="hidden sm:inline">
+          {serverProjectId ? "Sync" : "Save to server"}
+        </span>
+        {serverProjectId ? (
+          <span className="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        ) : null}
+      </Button>
 
       {/* Preview toggle */}
       <Button

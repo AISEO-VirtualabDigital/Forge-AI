@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,20 +10,70 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// Forge builder projects. Each project owns its blocks + SEO config (stored as
+// JSON in SQLite). The browser syncs the local zustand store to a project on
+// save, and the MCP server + task runner operate on this canonical state so
+// external agents (Claude Desktop, n8n, opencode) can drive the same project.
+model Project {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  blocks     String   @default("[]") // JSON-serialized Block[]
+  seo        String   @default("{}") // JSON-serialized SeoConfig
+  customCode String   @default("")
+  mode       String   @default("dragdrop") // dragdrop | hybrid | code
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  tasks      AgentTask[]
+
+  @@index([updatedAt])
 }
 
-model Post {
+// Multi-tasking queue for agents. The in-process runner (and any external
+// worker) picks up `queued` tasks and drives them to completion. Multiple
+// tasks can run concurrently — the dashboard renders them live.
+model AgentTask {
+  id         String    @id @default(cuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind       String    // audit_seo | generate_page | optimize_meta | internal_links | publish_wp | custom
+  status     String    @default("queued") // queued | running | done | failed | cancelled
+  priority   Int       @default(5)
+  title      String    @default("")
+  input      String    @default("{}") // JSON task parameters
+  output     String    @default("{}") // JSON result
+  logs       String    @default("") // newline-separated log lines
+  agentId    String?   // which provider/agent handled it
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([projectId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Pluggable LLM providers. Active one is used by llmChat(). Supports z-ai SDK,
+// OpenAI-compatible endpoints (Ollama, LM Studio, vLLM), and the opencode
+// CLI as a "delegate heavy coding to local agent" backend.
+model ProviderConfig {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  name      String
+  type      String   // zai | openai_compat | opencode
+  baseUrl   String?  // e.g. http://192.168.1.10:11434/v1 (Ollama on the laptop)
+  apiKey    String?  // optional for local endpoints
+  model     String?  // e.g. llama3.1:8b, qwen2.5-coder:7b
+  active    Boolean  @default(false)
+  healthy   Boolean  @default(true)
+  lastCheck DateTime?
   createdAt DateTime @default(now())
+}
+
+// Singleton n8n integration config.
+model N8nConfig {
+  id        String   @id @default("singleton")
+  baseUrl   String?  // e.g. http://vps-ip:5678
+  apiKey    String?
+  enabled   Boolean  @default(false)
   updatedAt DateTime @updatedAt
 }

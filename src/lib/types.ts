@@ -198,3 +198,63 @@ export interface WordPressConnectionState {
   lastChecked?: number;
   error?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Server-side project + multi-agent task orchestration
+// ---------------------------------------------------------------------------
+
+export type ProviderType = "zai" | "openai_compat" | "opencode";
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  type: ProviderType;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  active: boolean;
+  healthy: boolean;
+  lastCheck?: number;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  slug: string;
+  mode: string;
+  blockCount: number;
+  taskCounts: { queued: number; running: number; done: number; failed: number };
+  updatedAt: string;
+}
+
+export type TaskKind =
+  | "audit_seo"
+  | "generate_page"
+  | "optimize_meta"
+  | "internal_links"
+  | "publish_wp"
+  | "custom";
+
+export type TaskStatus = "queued" | "running" | "done" | "failed" | "cancelled";
+
+export interface AgentTask {
+  id: string;
+  projectId: string;
+  kind: TaskKind;
+  status: TaskStatus;
+  priority: number;
+  title: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  logs: string;
+  agentId?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+}
+
+export interface N8nConfig {
+  baseUrl?: string;
+  apiKey?: string;
+  enabled: boolean;
+}

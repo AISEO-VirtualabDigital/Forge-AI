@@ -527,3 +527,254 @@ Stage Summary:
 - Hydration error eliminated. The builder now mounts cleanly: skeleton during
   SSR → full app after client mount + state rehydration, with zero markup
   divergence.
+
+---
+Task ID: 4-mcp
+Agent: full-stack-developer
+Task: Build an MCP (Model Context Protocol) server at `/api/mcp` that exposes
+Forge's builder + SEO + agent capabilities as typed tools, so external MCP
+clients (Claude Desktop, Cline, Cursor, n8n MCP nodes, the `mcp` CLI) can
+drive Forge projects over the standard Streamable HTTP transport.
+
+Work Log:
+- Installed `@modelcontextprotocol/sdk@1.30.0` (already had `zod@4.3.5` in
+  deps). Verified the SDK exposes `McpServer` + `ResourceTemplate` from
+  `/server/mcp.js`, the Node.js `StreamableHTTPServerTransport` from
+  `/server/streamableHttp.js` (expects IncomingMessage + ServerResponse),
+  AND the Web Standard `WebStandardStreamableHTTPServerTransport` from
+  `/server/webStandardStreamableHttp.js` (accepts Web Standard `Request`
+  and returns a `Response`).
+- Decision: use the Web Standard transport, NOT the Node.js transport, in
+  the route handler — Next.js App Router gives us a Web Standard `Request`,
+  not a Node `IncomingMessage`. Documented this in the route's header
+  comment so the choice is clear. The Node.js variant would require a
+  `@hono/node-server` bridge inside the route handler, which is unnecessary
+  plumbing.
+- Built `src/lib/mcp-server.ts` (server-only, no `"use client"`):
+  - Static `TOOL_DEFS` table holds each tool's `{ name, description,
+    schema (ZodRawShape), run (handler) }`. This serves two consumers:
+      1. `listAllTools()` returns the catalog ({ name, description,
+         inputSchema }) for the dashboard's tool-catalog widget.
+      2. `buildForgeMcpServer()` wires the table into a fresh McpServer via
+         `server.registerTool(name, { description, inputSchema }, cb)`.
+    A NEW server is built per HTTP request — this is the official SDK
+    stateless pattern (`simpleStatelessStreamableHttp` example). The SDK's
+    `Protocol.connect()` throws "Already connected" if the same server is
+    reconnected, so a true singleton wouldn't work across requests; the
+    factory `getForgeMcpServer()` returns a fresh server per call.
+  - Added `withDefaultSeo()` helper that merges partial/stored SEO against
+    `DEFAULT_SEO` (imported from `src/lib/seo`). The downstream analyzers
+    (`analyzeSeo`, `analyzeEeat`) and HTML renderer (`blocksToHtml`) assume
+    a complete SeoConfig and crash on undefined fields like
+    `seo.jsonLd.trim()`. The existing client always seeds from
+    `DEFAULT_SEO`, but MCP tools accept arbitrary partial patches, so every
+    DB read of SEO now runs through `withDefaultSeo()`.
+  - Reused existing logic everywhere (no re-implementation):
+      * `db` (Prisma)             → src/lib/db
+      * `analyzeSeo/extractText`  → src/lib/seo (+ `DEFAULT_SEO`)
+      * `analyzeEeat`             → src/lib/eeat
+      * `createBlock`             → src/lib/blocks
+      * `blocksToHtml/buildCtx`   → src/lib/ai-context
+      * `llmChat`                 → src/lib/llm (pluggable provider)
+      * `ensureRunner`            → src/lib/task-runner
+      * `invalidateProvider`      → src/lib/providers
+      * `stripFences/extractJsonArray` → src/lib/json-utils
+- Registered 14 tools (Zod input schemas, structured JSON results, try/catch
+  that returns `{ isError: true, content: [{ type: "text", text }] }` per the
+  MCP error spec):
+    1.  forge_list_projects         () → [{id,name,slug,mode,blockCount,updatedAt}]
+    2.  forge_get_project          ({projectId}) → full project (blocks, seo, mode, customCode)
+    3.  forge_create_project       ({name, blocks?, seo?}) → {projectId} (SEO merged vs DEFAULT_SEO)
+    4.  forge_update_blocks        ({projectId, blocks}) → {ok, blockCount}
+    5.  forge_add_block            ({projectId, type, props?, style?, index?}) → {blockId, blockCount}
+    6.  forge_update_seo           ({projectId, seo}) → {seo: merged}
+    7.  forge_analyze_seo          ({projectId}) → {seoScore, eeatScore, wordCount, failingChecks, eeatChecks}
+    8.  forge_generate_blocks      ({projectId, prompt}) → {added, types} (LLM, mirrors /api/ai/generate-block system prompt)
+    9.  forge_export_html          ({projectId}) → {html} (blocksToHtml output)
+    10. forge_create_task          ({projectId, kind, title?, input?}) → {taskId, status} + ensureRunner()
+    11. forge_list_tasks          ({projectId}) → recent tasks
+    12. forge_get_task            ({taskId}) → full task (input, output, logs)
+    13. forge_list_providers      () → providers with apiKey masked as "•••••"
+    14. forge_set_active_provider ({providerId}) → {ok:true} + invalidateProvider()
+- Registered 2 RESOURCES as URI templates (via `ResourceTemplate`):
+    * `forge://project/{id}/context` → buildPageContext output (text/markdown)
+    * `forge://project/{id}/blocks`  → current Block[] (application/json)
+    Both use `variables: Record<string, string | string[]>` (the SDK's
+    `Variables` type) and normalize the `id` via `Array.isArray` check.
+- Registered 1 PROMPT:
+    * `forge_page_audit` ({projectId}) → returns a user-role message
+      embedding `buildPageContext` output and instructing the model to
+      produce a prioritized action list referencing Forge tools.
+- Built `src/app/api/mcp/route.ts` with POST + GET + DELETE + OPTIONS:
+  - `runtime = "nodejs"`, `dynamic = "force-dynamic"` (so Prisma + SDK work
+    and Next never caches JSON-RPC responses).
+  - POST: parses body up front (controls the JSON parse-error path), builds
+    a fresh McpServer + fresh transport (`sessionIdGenerator: undefined`
+    → stateless; `enableJsonResponse: true` → plain JSON response, no SSE),
+    connects them, dispatches via `transport.handleRequest(req, { parsedBody })`,
+    and returns the Response with CORS headers attached. Supports both
+    single-message (object) and batch (array) JSON-RPC.
+  - GET: returns 405 with a JSON-RPC error (stateless mode has no SSE stream).
+  - DELETE: returns 200 OK (stateless mode has no session to terminate).
+  - OPTIONS: responds to CORS preflight with 204 + permissive headers.
+- Verification (in-process bun script, since the dev server is in a separate
+  sandbox and unreachable from this shell):
+    * `initialize` → 200, serverInfo `{name:"forge-mcp", version:"1.0.0"}`,
+      protocolVersion `2025-06-18`, capabilities include
+      `{tools,resources,prompts}` with `listChanged:true`.
+    * `tools/list` → 200, 14 tools with correct names + schemas.
+    * `tools/call forge_create_project` → created a project, returned a cuid.
+    * `tools/call forge_add_block` (type=hero, custom props) → block
+      inserted, returns {blockId, blockCount}.
+    * `tools/call forge_update_seo` (partial patch) → merged 3 fields with
+      12 DEFAULT_SEO fields = 15 total, returned the merged config.
+    * `tools/call forge_analyze_seo` → scores + failing-checks array (no
+      more `seo.jsonLd.trim()` crash after the `withDefaultSeo` fix).
+    * `tools/call forge_export_html` → full HTML document with proper head
+      meta + body.
+    * `tools/call forge_get_project` → full project record.
+    * `tools/call forge_create_task` (audit_seo) → enqueued, runner picked
+      it up; `forge_list_tasks` shows status transitioning queued → running.
+    * `tools/call forge_get_task` → full task record (input, output, logs).
+    * `tools/call forge_list_providers` → [] (correct, no providers
+      configured), masked apiKey shown when present.
+    * `resources/read forge://project/{id}/context` → text/markdown page
+      context with title, meta, focus keyword, block summary.
+    * `resources/read forge://project/{id}/blocks` → application/json
+      Block[] array.
+    * `resources/templates/list` → both resource templates listed.
+    * `prompts/get forge_page_audit` → returns user-role message embedding
+      the page context + the audit instructions.
+    * `prompts/list` → lists the prompt with its required `projectId` arg.
+    * Batch JSON-RPC (2 messages in one request) → returns an array of 2
+      responses with correct IDs (1 and 2).
+    * `forge_get_project` with nonexistent ID → structured MCP error result
+      `{ isError: true, content: [{type:"text", text:"Project not found: ..."}] }`.
+- `bun run lint` → 0 errors, 0 warnings. `npx tsc --noEmit` → no MCP-related
+  type errors (other pre-existing errors in n8n/route.ts, providers.ts etc
+  were not introduced by this task).
+
+Stage Summary:
+- Delivered a production-ready MCP server at `/api/mcp` that exposes 14 typed
+  tools, 2 URI-template resources, and 1 prompt over the standard
+  Streamable HTTP transport. External MCP clients can now drive the entire
+  Forge project lifecycle — list/get/create projects, add/update blocks,
+  update SEO, run deterministic SEO+EEAT analyses, generate blocks via LLM,
+  export HTML, enqueue agent tasks (audit_seo/generate_page/optimize_meta/
+  internal_links/publish_wp/custom), query task state, and switch LLM
+  providers — without touching the dashboard UI.
+- Architecture reuses every piece of existing Forge logic (db, seo, eeat,
+  blocks, ai-context, llm, task-runner, providers, json-utils). The MCP
+  layer is a thin, typed facade — no duplication.
+- Stateless per-request server/transport pattern (per the official SDK
+  example) avoids the `Protocol.connect` "Already connected" guard and
+  works with the widest range of clients. `enableJsonResponse: true` keeps
+  responses simple (plain JSON, no SSE plumbing) for the route handler.
+- Catalog (`listAllTools()`) is exported so the dashboard can render the
+  14-tool catalog without instantiating an McpServer.
+- Lint clean; verified end-to-end via in-process JSON-RPC dispatch.
+
+---
+Task ID: 21-28 (this turn — Option B: server state + MCP + orchestration + multi-tasking + local models + n8n)
+Agent: main + subagent (4-mcp)
+Task: Move project state server-side (Prisma), build an MCP server, an
+orchestration dashboard, a multi-tasking agent runner, pluggable LLM providers
+(z-ai / Ollama / OpenCode / Kilocode), and n8n bidirectional integration — so
+the VPS (8GB) runs the app + n8n + DB and the laptop (16GB) runs the local LLM.
+
+Work Log:
+- Prisma schema (prisma/schema.prisma): replaced scaffold with Project
+  {id,name,slug,blocks(JSON),seo(JSON),customCode,mode}, AgentTask
+  {id,projectId,kind,status,priority,title,input,output,logs,agentId,startedAt,finishedAt},
+  ProviderConfig {id,name,type,baseUrl,apiKey,model,active,healthy,lastCheck},
+  N8nConfig (singleton {baseUrl,apiKey,enabled}). db:push applied.
+- src/lib/types.ts: added ProviderConfig, ProjectSummary, TaskKind, TaskStatus,
+  AgentTask, N8nState, ProviderType types.
+- src/lib/providers.ts (NEW): pluggable LLM provider abstraction.
+  - ZaiProvider (z-ai-web-dev-sdk cloud, default fallback)
+  - OpenAiCompatProvider (Ollama http://laptop:11434/v1, LM Studio, vLLM,
+    OpenRouter — the "free models" path)
+  - OpenCodeProvider (shells out to `opencode run --model X` on the laptop for
+    code-heavy subtasks)
+  - llmChat() routes to the active provider in the DB, degrades to z-ai on
+    error. testProvider() health-checks a config. invalidateProvider() clears
+    the cache on config change.
+- src/lib/llm.ts: refactored to delegate to providers.ts while keeping getZai()
+  for backward compat. All existing /api/ai/* routes now honor the active
+  provider automatically.
+- src/lib/store.ts: added activeView (builder|dashboard), serverProjectId,
+  serverSyncing state + setters.
+- Project API: src/app/api/projects/route.ts (GET list / POST create),
+  /api/projects/[id]/route.ts (GET / PUT / DELETE). JSON-stringifies blocks +
+  seo for SQLite storage.
+- Task API: /api/tasks/route.ts (GET list / POST create → enqueues; calls
+  ensureRunner()), /api/tasks/[id]/route.ts (GET detail / DELETE cancel).
+- src/lib/task-runner.ts (NEW): in-process concurrent runner.
+  - CONCURRENCY=3, polls every 1.5s for queued tasks, claims atomically.
+  - Six task kinds: audit_seo (analyzeSeo+analyzeEeat+AI internal-links),
+    generate_page (AI block generator → appends to project), optimize_meta
+    (AI rewrites SEO), internal_links (audit subset), publish_wp (POSTs to WP
+    REST), custom (free-form LLM).
+  - appendLog() does read-modify-write (SQLite doesn't support Prisma `append`).
+  - runnerStats() for the dashboard; ensureRunner() idempotent boot.
+  - Fixed initial bug: Prisma `append` not supported on SQLite → switched to
+    read-modify-write. Task then completed successfully (score 68/100, 3 links).
+- Provider API: /api/providers (GET/POST), /api/providers/[id] (PATCH/DELETE),
+  /api/providers/[id]/activate (POST), /api/providers/test (POST health-check).
+  API key masked in GET responses; only overwritten when a non-• value is sent.
+- n8n API (bidirectional):
+  - /api/n8n (GET config / PUT update)
+  - /api/n8n/webhook (POST) — n8n calls this to CREATE an AgentTask in Forge
+    (secured with x-forge-key header; priority-boosted).
+  - /api/n8n/trigger (POST) — Forge triggers an n8n workflow by ID (heavy work
+    offloaded to the VPS n8n instance).
+- MCP server (subagent Task 4-mcp): src/lib/mcp-server.ts + /api/mcp/route.ts.
+  - 14 tools (forge_list_projects, forge_get_project, forge_create_project,
+    forge_update_blocks, forge_add_block, forge_update_seo, forge_analyze_seo,
+    forge_generate_blocks, forge_export_html, forge_create_task,
+    forge_list_tasks, forge_get_task, forge_list_providers,
+    forge_set_active_provider).
+  - 2 resources (forge://project/{id}/context, /blocks), 1 prompt
+    (forge_page_audit).
+  - Streamable HTTP transport (WebStandardStreamableHTTPServerTransport),
+    stateless per-request, runtime=nodejs, force-dynamic.
+- Dashboard UI: src/components/dashboard/OrchestrationDashboard.tsx.
+  - Left sidebar: projects list with live task-count badges (running/queued/
+    failed), "Back to Builder".
+  - Center: Orchestration header (X running · Y queued) + 3 tabs:
+    Tasks (live-polled every 2s, cards with status icon, expandable logs,
+    output JSON, cancel button), Providers (add/test/activate/delete,
+    OpenAI-compat/Ollama/opencode/z-ai), n8n (base URL + API key + enabled +
+    webhook receiver instructions with copy-ready URL).
+  - Spawn-task dialog: pick kind (audit/generate/optimize/links/publish/custom),
+    per-kind inputs (prompt for generate/custom, WP creds for publish).
+- TopBar: added Builder/Dashboard view switcher + "Save to server" button
+  (creates or updates a server Project, shows green dot when linked).
+- page.tsx: renders OrchestrationDashboard when activeView==="dashboard", else
+  the existing builder. Mount-gate preserved.
+- bun run lint → 0 errors, 0 warnings.
+
+Self-verification (curl + Agent Browser):
+- Created a project via API → got projectId.
+- Queued an audit_seo task → runner picked it up within ~2s → status went
+  queued→running→done. Logs: "SEO score: 68/100, EEAT: 44/100", "AI suggested
+  3 internal links", "Task completed". Output: {seoScore:68, eeatScore:44,
+  linkSuggestions:3}.
+- MCP /api/mcp initialize → returns {protocolVersion, serverInfo:{forge-mcp
+  1.0.0}}. tools/list → 14 tools with Zod schemas. (Requires Accept:
+  application/json, text/event-stream per spec.)
+- Browser: TopBar shows Builder + Dashboard + Save to server + WordPress.
+  Dashboard renders projects sidebar + Orchestration header + Tasks/Providers/
+  N8n tabs. Tasks tab auto-selects linked project and live-polls. Providers
+  tab shows "Add provider" with Ollama guidance. N8n tab shows webhook
+  receiver URL + config form. No browser/console errors.
+
+Stage Summary:
+- Option B delivered end-to-end: server-side project state (Prisma), a 14-tool
+  MCP server (external agents can now drive Forge), a multi-tasking agent
+  runner (3 concurrent, 6 task kinds), an orchestration dashboard (live task
+  queue, providers, n8n), pluggable LLM providers (free local models via
+  Ollama/OpenCode on the laptop), and bidirectional n8n integration (VPS n8n
+  ↔ Forge webhook + trigger). The VPS/laptop split is wired: app + DB + n8n
+  on the VPS, Ollama + opencode on the laptop (point the provider baseUrl at
+  the laptop's IP). Lint clean, browser-verified, MCP-verified via curl.

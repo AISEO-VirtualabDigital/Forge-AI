@@ -31,6 +31,10 @@ interface BuilderState {
   // wordpress
   wordpress: WordPressConfig;
   wpConnected: boolean;
+  // orchestration
+  activeView: "builder" | "dashboard";
+  serverProjectId: string | null;
+  serverSyncing: boolean;
 
   // actions
   setProjectName: (n: string) => void;
@@ -56,6 +60,10 @@ interface BuilderState {
 
   setWordPress: (patch: Partial<WordPressConfig>) => void;
   setWpConnected: (b: boolean) => void;
+
+  setActiveView: (v: "builder" | "dashboard") => void;
+  setServerProjectId: (id: string | null) => void;
+  setServerSyncing: (b: boolean) => void;
 }
 
 function genId() {
@@ -87,6 +95,10 @@ export const useBuilder = create<BuilderState>()(
 
       wordpress: { siteUrl: "", username: "", appPassword: "" },
       wpConnected: false,
+
+      activeView: "builder",
+      serverProjectId: null,
+      serverSyncing: false,
 
       setProjectName: (n) => set({ projectName: n }),
       setMode: (m) => set({ mode: m }),
@@ -183,6 +195,10 @@ export const useBuilder = create<BuilderState>()(
           wpConnected: patch.siteUrl !== undefined ? false : s.wpConnected,
         })),
       setWpConnected: (b) => set({ wpConnected: b }),
+
+      setActiveView: (v) => set({ activeView: v }),
+      setServerProjectId: (id) => set({ serverProjectId: id }),
+      setServerSyncing: (b) => set({ serverSyncing: b }),
     }),
     {
       name: "forge-builder-v1",
