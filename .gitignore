@@ -1,7 +1,11 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# ============================================================
+# Forge AI — .gitignore
+# Thoroughly excludes local build artifacts, dependencies,
+# environment secrets, and local SQLite databases.
+# ============================================================
 
-# dependencies
-node_modules
+# --- Dependencies ---
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -10,45 +14,84 @@ node_modules
 !.yarn/releases
 !.yarn/versions
 
-# testing
+# --- Testing ---
 /coverage
+*.lcov
 
-# next.js
+# --- Next.js build artifacts ---
 /.next/
 /out/
-
-# production
 /build
+*.tsbuildinfo
+next-env.d.ts
 
-# misc
-.DS_Store
-*.pem
+# --- Production standalone ---
+# (Next.js standalone output lives under .next/standalone — covered above)
 
-# debug
+# --- Vercel ---
+.vercel
+
+# --- Environment files (NEVER commit) ---
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.test.local
+.env*.local
+
+# --- Local SQLite databases (NEVER commit) ---
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+/db/*.db
+/db/*.db-journal
+/prisma/*.db
+/prisma/*.db-journal
+
+# --- Prisma generated client (regenerated on install/build) ---
+# NOTE: @prisma/client is an npm package; the generated client lives in
+# node_modules/.prisma which is already ignored by node_modules/.
+# Keep migrations tracked — only ignore local dev DB snapshots.
+
+# --- Logs ---
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
-*.log
 dev.log
 dev.out.log
-test
-prompt
-
 server.log
-# Skills directory
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.pem
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# --- Python caches (push_to_github.py etc.) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# --- Misc local ---
+.claude
+.z-ai-config
+.zscripts/
+local-*
+prompt
+test
 /skills/
+/agent-ctx/
+/download/
+/mini-services/*/
