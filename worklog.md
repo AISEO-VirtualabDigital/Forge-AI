@@ -392,3 +392,90 @@ Stage Summary:
   (no CORS issues, app password never logged).
 - All wired into the existing TopBar + RightPanel + Footer; lint clean;
   dev server healthy; browser-verified end-to-end.
+
+---
+Task ID: 15-19 (this turn)
+Agent: main
+Task: Research the open-source Yoast SEO & Rank Math plugins, then build a
+unified WordPress plugin ("Forge SEO Connector") that serves as the live
+connector between Forge and a specific WordPress site — bridging SEO meta
+for whichever plugin is active.
+
+Work Log:
+- Used z-ai web_search to research Yoast + Rank Math meta keys & REST API.
+  Confirmed: Yoast stores `_yoast_wpseo_*` post meta and exposes a read-only
+  `yoast_head_json` REST field (rendered, not writable). Rank Math stores
+  `rank_math_*` post meta and has NO native REST exposure. Neither plugin
+  registers its meta with `show_in_rest = true`, so standard WP REST writes
+  silently drop all SEO fields.
+- Wrote `wordpress-plugin/ANALYSIS.md` documenting both data models, the
+  field-mapping table, the variable-syntax difference (`%%var%%` vs `%var%`),
+  and the architectural problem our plugin solves.
+- Built the unified WordPress plugin in
+  `wordpress-plugin/forge-seo-connector/` (5 PHP files, ~960 lines):
+  - `forge-seo-connector.php` — main bootstrap, registers REST namespace
+    `forge-seo/v1`, admin notice showing detected plugins, activation hooks.
+  - `includes/class-detector.php` — detects Yoast (`WPSEO_VERSION` /
+    `WPSEO_Meta`) and Rank Math (`RANK_MATH_VERSION` / `RankMath` class)
+    at runtime, returns versions + which is "primary" for reads.
+  - `includes/class-mapper.php` — the translation core: read_rank_math /
+    read_yoast / read_generic normalize to Forge's SeoConfig shape; write
+    goes to BOTH plugins when both are active (sync), or to whichever is
+    active, or to `_forge_seo_*` generic meta if neither. Full field mapping:
+    title, description, focusKeyword, canonical, robots (Yoast noindex/
+    nofollow keys vs Rank Math serialized array), OG (3 fields), Twitter (3
+    fields), JSON-LD schema. Normalizer fills missing fields from WP post
+    data and attaches a `__post` object.
+  - `includes/class-rest.php` — REST controller: 4 endpoints:
+    GET /status, GET /seo?post_id, POST /seo?post_id, GET /posts. All require
+    Application Password Basic Auth (edit_posts for read, edit_post for write).
+    Input sanitized via an allow-list of 18 known fields; JSON-LD validated.
+  - `uninstall.php` — removes ONLY the generic `_forge_seo_*` meta; never
+    touches Yoast/RankMath data.
+  - `README.md` — installation, endpoints, field-mapping table, security notes.
+- Built Forge backend proxy routes (so credentials never hit the browser
+  bundle beyond the dialog, and CORS is never an issue):
+  - `src/app/api/wordpress/seo-status/route.ts` (POST) — calls the plugin's
+    /status endpoint. Returns `{installed:false}` on 404 (plugin missing),
+    401 on bad creds, 504 on network failure — all graceful, non-crashing.
+  - `src/app/api/wordpress/seo-sync/route.ts` (POST) — bidirectional proxy
+    with `op: "get"|"put"` auto-detected from body shape. 404 → plugin-
+    not-installed hint, 401 → credentials rejected, 504 → network.
+- Built `src/components/builder/LiveSeoSync.tsx` — the Live SEO Sync UI
+  embedded in the WordPress dialog:
+  - Auto-checks connector plugin status on connect; shows Yoast/RankMath
+    detection badges or an install hint if the plugin isn't there.
+  - Post picker dropdown (loads recent WP posts).
+  - **Pull from WP** button — reads normalized SEO from the selected WP
+    post, shows a field-by-field diff (old → new), and applies it to
+    Forge's SEO config.
+  - **Push to WP** button — writes Forge's current SEO to the selected WP
+    post via the connector plugin, with a toast showing which plugin(s)
+    received the write.
+- Integrated LiveSeoSync into `WordPressDialog.tsx` between the publish
+  section and the recent-posts list.
+- `bun run lint` -> 0 errors, 0 warnings.
+
+Self-verification (Agent Browser + curl):
+- Page loads cleanly (title correct), no browser/console errors.
+- WordPress dialog opens and renders the new "Live SEO Sync" section with
+  "Not installed" status and the install hint (since no real WP is
+  connected in this sandbox).
+- curl /api/wordpress/seo-status: empty config → 400 "Invalid WordPress
+  configuration"; bad domain → 504 `{"installed":false,"error":"fetch failed"}`.
+- curl /api/wordpress/seo-sync: missing postId → 400 "postId is required";
+  bad domain → 504 "fetch failed"; valid-shape push → 504 (network).
+- Dev server log shows all 3 new routes returning correct status codes.
+
+Stage Summary:
+- Delivered the "check and analyze" + "unified connector" the user asked for:
+  1. ANALYSIS.md — full technical breakdown of Yoast & Rank Math data
+     models, meta keys, REST exposure, variable syntax, and the gap our
+     plugin fills.
+  2. The Forge SEO Connector WordPress plugin (PHP, GPL, zip-and-upload)
+     that detects Yoast/RankMath/both/none and exposes a normalized, Basic-
+     Auth-protected REST namespace so Forge can read/write live SEO data
+     regardless of which plugin the site uses.
+  3. Forge-side proxy routes + a Live SEO Sync UI with Pull/Push buttons and
+     a field-diff view — the "connector of live" for the specific website.
+- All code lint-clean; backend verified with curl; UI verified in browser.

@@ -15,6 +15,7 @@ import {
 import { useBuilder } from "@/lib/store";
 import { blocksToHtml } from "@/lib/ai-context";
 import type { WordPressPost } from "@/lib/types";
+import { LiveSeoSync } from "./LiveSeoSync";
 import {
   Dialog,
   DialogContent,
@@ -329,6 +330,14 @@ export function WordPressDialog({ open, onOpenChange }: Props) {
                 </div>
               ) : null}
             </div>
+
+            <Separator />
+
+            {/* Live SEO Sync — bridges Yoast / Rank Math via the plugin */}
+            <LiveSeoSync
+              config={wpConnected ? wp : null}
+              connected={wpConnected}
+            />
 
             <Separator />
 
