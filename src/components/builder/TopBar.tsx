@@ -78,6 +78,7 @@ export function TopBar() {
   const customCode = useBuilder((s) => s.customCode);
   const resetProject = useBuilder((s) => s.resetProject);
   const wpConnected = useBuilder((s) => s.wpConnected);
+  const wpPostId = useBuilder((s) => s.wpPostId);
   const activeView = useBuilder((s) => s.activeView);
   const setActiveView = useBuilder((s) => s.setActiveView);
   const serverProjectId = useBuilder((s) => s.serverProjectId);
@@ -282,6 +283,14 @@ export function TopBar() {
           <span className="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />
         ) : null}
       </Button>
+      {wpPostId ? (
+        <span
+          className="hidden items-center gap-1 rounded-md border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:flex"
+          title={`Editing imported WordPress post #${wpPostId}. Use the Live SEO Sync to push changes back.`}
+        >
+          <Plug className="h-2.5 w-2.5" /> WP #{wpPostId}
+        </span>
+      ) : null}
 
       {/* Export menu */}
       <DropdownMenu>

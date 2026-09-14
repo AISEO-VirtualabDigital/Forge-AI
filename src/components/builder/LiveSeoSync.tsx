@@ -65,11 +65,13 @@ interface SeoPutResult {
 interface Props {
   config: WordPressConfig | null;
   connected: boolean;
+  initialPostId?: number | null;
 }
 
-export function LiveSeoSync({ config, connected }: Props) {
+export function LiveSeoSync({ config, connected, initialPostId }: Props) {
   const seo = useBuilder((s) => s.seo);
   const updateSeo = useBuilder((s) => s.updateSeo);
+  const wpPostId = useBuilder((s) => s.wpPostId);
 
   const [status, setStatus] = React.useState<SeoStatus | null>(null);
   const [checkingStatus, setCheckingStatus] = React.useState(false);
@@ -127,7 +129,13 @@ export function LiveSeoSync({ config, connected }: Props) {
       if (res.ok) {
         const p: WpPost[] = Array.isArray(data.posts) ? data.posts : [];
         setPosts(p);
-        if (p.length > 0 && !selectedPostId) {
+        // Prefer the imported WP post if set, else the first post.
+        const preferred =
+          (initialPostId ?? wpPostId) &&
+          p.find((x) => x.id === (initialPostId ?? wpPostId));
+        if (preferred) {
+          setSelectedPostId(String(preferred.id));
+        } else if (p.length > 0 && !selectedPostId) {
           setSelectedPostId(String(p[0].id));
         }
       }

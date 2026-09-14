@@ -778,3 +778,61 @@ Stage Summary:
   ↔ Forge webhook + trigger). The VPS/laptop split is wired: app + DB + n8n
   on the VPS, Ollama + opencode on the laptop (point the provider baseUrl at
   the laptop's IP). Lint clean, browser-verified, MCP-verified via curl.
+
+---
+Task ID: 29-34 (WordPress import flow)
+Agent: main
+Task: Add "Import from WordPress" so users can pull an existing WP post into
+the Forge canvas as editable blocks (with live Yoast/RankMath SEO), optimize
+it, and push it back to the same post.
+
+Work Log:
+- src/lib/html-to-blocks.ts (NEW): deterministic heuristic HTML→Block[]
+  converter. Strips Gutenberg comments, splits top-level elements by tracking
+  tag depth, maps h1-h6→heading, p→paragraph (img-only p→image, single-link
+  p→button), figure→image (figcaption as alt), blockquote→quote (cite/footer
+  as author), ul/ol→features (3+ items) or paragraphs, hr→divider, nav→nav
+  (brand+links), header→hero, footer→footer. Unknown containers recurse.
+  Never throws — falls back to a single paragraph with escaped HTML so no
+  content is lost. Caps at 60 blocks.
+- Verified the converter against a realistic 9-element Gutenberg payload:
+  extracted 9 correct blocks (paragraph, heading, paragraph, features(3),
+  image, quote, button-as-paragraph, divider, paragraph) with 0 warnings.
+- src/lib/store.ts: added wpPostId + setWpPostId; cleared on reset.
+- POST /api/wordpress/import/route.ts (NEW):
+  1. Fetches the WP post (title, content.rendered, slug, link, excerpt) via
+     GET /wp-json/wp/v2/posts/{id}.
+  2. Best-effort fetches live SEO from the forge-seo-connector plugin
+     (GET /wp-json/forge-seo/v1/seo?post_id={id}). On 404/network error
+     falls back to deriving SEO from the post title+excerpt+link.
+  3. Converts content.rendered → Block[] via htmlToBlocks.
+  4. Returns { wpPost, blocks, seo, seoSource, projectName, blockCount,
+     warnings, htmlLength }. seoSource="plugin" if live Yoast/RankMath meta
+     was read, "fallback" otherwise (so the UI can tell the user).
+- WordPressDialog: added an Import button (ArrowDownToLine icon) to each post
+  in the Recent posts list. importPost(postId) calls the route, loads the
+  result into the builder (replaceBlocks + updateSeo + setProjectName +
+  setWpPostId), switches to dragdrop mode + builder view, closes the dialog,
+  and toasts the result (with a note if the connector plugin wasn't detected).
+- TopBar: added a "WP #<id>" badge next to the WordPress button when the
+  current project was imported from WP — so the user knows they're editing an
+  imported post and can push back via Live SEO Sync.
+- LiveSeoSync: now accepts initialPostId and auto-selects the imported WP
+  post in the dropdown, so "Push to WP" targets the right post immediately.
+- bun run lint → 0 errors, 0 warnings.
+
+Self-verification:
+- Converter test: 9-block Gutenberg payload → 9 correct blocks, 0 warnings.
+- import route: empty config → 400 "Invalid WordPress configuration";
+  unreachable host → 504 "fetch failed". Both graceful.
+- Browser: WordPress dialog renders with Site URL/Username/App password/
+  Test connection/Publish as/Live SEO Sync/Recent posts (each row now has an
+  Import button). No browser/console errors. VLM confirmed the dialog content.
+- Dev log: no errors.
+
+Stage Summary:
+- Import-from-WordPress is live end-to-end: connect → pick a post → click the
+  import arrow → the post's HTML becomes editable Forge blocks + its live
+  Yoast/RankMath SEO loads into the SEO panel → optimize with AI → push back
+  to the same post via Live SEO Sync. The "WP #<id>" badge in the TopBar
+  reminds the user which post they're editing.

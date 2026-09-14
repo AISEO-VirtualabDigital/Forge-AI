@@ -11,6 +11,8 @@ import {
   ExternalLink,
   Trash2,
   RefreshCw,
+  Download,
+  ArrowDownToLine,
 } from "lucide-react";
 import { useBuilder } from "@/lib/store";
 import { blocksToHtml } from "@/lib/ai-context";
@@ -64,6 +66,15 @@ export function WordPressDialog({ open, onOpenChange }: Props) {
   const [posts, setPosts] = React.useState<WordPressPost[]>([]);
   const [loadingPosts, setLoadingPosts] = React.useState(false);
   const [publishedLink, setPublishedLink] = React.useState<string | null>(null);
+  const [importingId, setImportingId] = React.useState<number | null>(null);
+
+  const replaceBlocks = useBuilder((s) => s.replaceBlocks);
+  const updateSeo = useBuilder((s) => s.updateSeo);
+  const setProjectNameStore = useBuilder((s) => s.setProjectName);
+  const setWpPostId = useBuilder((s) => s.setWpPostId);
+  const setMode = useBuilder((s) => s.setMode);
+  const setActiveView = useBuilder((s) => s.setActiveView);
+  const setCustomCode = useBuilder((s) => s.setCustomCode);
 
   const canConnect =
     wp.siteUrl.trim() && wp.username.trim() && wp.appPassword.trim();
@@ -174,6 +185,48 @@ export function WordPressDialog({ open, onOpenChange }: Props) {
       toast.error(e instanceof Error ? e.message : "Could not load posts");
     } finally {
       setLoadingPosts(false);
+    }
+  }
+
+  async function importPost(postId: number) {
+    setImportingId(postId);
+    try {
+      const res = await fetch("/api/wordpress/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: wp, postId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Import failed");
+      }
+      // Load the imported content into the builder.
+      replaceBlocks(data.blocks ?? []);
+      if (data.seo) updateSeo(data.seo);
+      if (data.projectName) setProjectNameStore(data.projectName);
+      setWpPostId(postId);
+      setMode("dragdrop");
+      setCustomCode(data.blocks?.length ? "" : "<!-- imported -->");
+      // Switch to the builder view so the user sees the imported page.
+      setActiveView("builder");
+      onOpenChange(false);
+      const warnNote =
+        data.seoSource === "plugin"
+          ? " with live Yoast/RankMath meta"
+          : " (connector plugin not detected — using fallback SEO)";
+      toast.success(
+        `Imported ${data.blockCount ?? 0} block${(data.blockCount ?? 0) !== 1 ? "s" : ""}${warnNote}`,
+      );
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        setTimeout(
+          () => toast.info(data.warnings[0]),
+          600,
+        );
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setImportingId(null);
     }
   }
 
@@ -396,6 +449,21 @@ export function WordPressDialog({ open, onOpenChange }: Props) {
                       >
                         {p.status}
                       </Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 shrink-0 px-1.5 text-[10px]"
+                        onClick={() => importPost(p.id)}
+                        disabled={importingId !== null}
+                        title="Import this post into the builder"
+                      >
+                        {importingId === p.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <ArrowDownToLine className="h-3 w-3" />
+                        )}
+                      </Button>
                       <a
                         href={p.link}
                         target="_blank"

@@ -35,6 +35,9 @@ interface BuilderState {
   activeView: "builder" | "dashboard";
   serverProjectId: string | null;
   serverSyncing: boolean;
+  // wordpress import reference — the WP post the current builder project
+  // was imported from (so "push back" updates the same post). Cleared on reset.
+  wpPostId: number | null;
 
   // actions
   setProjectName: (n: string) => void;
@@ -64,6 +67,7 @@ interface BuilderState {
   setActiveView: (v: "builder" | "dashboard") => void;
   setServerProjectId: (id: string | null) => void;
   setServerSyncing: (b: boolean) => void;
+  setWpPostId: (id: number | null) => void;
 }
 
 function genId() {
@@ -99,6 +103,7 @@ export const useBuilder = create<BuilderState>()(
       activeView: "builder",
       serverProjectId: null,
       serverSyncing: false,
+      wpPostId: null,
 
       setProjectName: (n) => set({ projectName: n }),
       setMode: (m) => set({ mode: m }),
@@ -172,6 +177,8 @@ export const useBuilder = create<BuilderState>()(
           seo: DEFAULT_SEO,
           customCode:
             "<!-- Write your custom HTML here -->\n<h1>Hello world</h1>",
+          serverProjectId: null,
+          wpPostId: null,
         }),
 
       setChatOpen: (open) => set({ chatOpen: open }),
@@ -199,6 +206,7 @@ export const useBuilder = create<BuilderState>()(
       setActiveView: (v) => set({ activeView: v }),
       setServerProjectId: (id) => set({ serverProjectId: id }),
       setServerSyncing: (b) => set({ serverSyncing: b }),
+      setWpPostId: (id) => set({ wpPostId: id }),
     }),
     {
       name: "forge-builder-v1",
