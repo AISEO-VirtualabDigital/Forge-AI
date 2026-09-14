@@ -479,3 +479,51 @@ Stage Summary:
   3. Forge-side proxy routes + a Live SEO Sync UI with Pull/Push buttons and
      a field-diff view — the "connector of live" for the specific website.
 - All code lint-clean; backend verified with curl; UI verified in browser.
+
+---
+Task ID: 20 (hydration fix)
+Agent: main
+Task: Fix the React hydration mismatch ("Recoverable Error: Hydration failed
+because the server rendered text didn't match the client") reported for the
+drag handles and the Footer EEAT score.
+
+Root cause analysis:
+- Mismatch #1 (dnd-kit): the `<DndContext>` from @dnd-kit/core generates
+  auto-incremented IDs for its `aria-describedby` accessibility announcer
+  (`DndDescribedBy-0` on server vs `DndDescribedBy-3` on client). This is a
+  well-known SSR issue with dnd-kit — the counter is module-global and the
+  server/client renders diverge.
+- Mismatch #2 (Footer): the EEAT score color class differs
+  (`text-amber-500` = 50 on client vs `text-red-500` = 47 on server) because
+  the zustand store is persisted to localStorage and rehydrates on the client
+  AFTER the server render. The server therefore renders with default state
+  (author = "Forge Team" → hasAuthorBio false → lower score) while the client
+  renders with the persisted, AI-optimized state. Same issue would affect any
+  component reading persisted state (blocks, projectName, mode, etc.).
+
+Fix:
+- Applied a mount-gate pattern to `src/app/page.tsx` (the same pattern the
+  existing `MobileHint` component already used). Added a `mounted` state that
+  flips to true inside `useEffect`. While `!mounted`, render a stable
+  `BuilderSkeleton` (matches the app shell layout: h-14 top bar, flex-1 main
+  with centered spinner, h-8 footer) so the server and the first client
+  render produce identical markup → no hydration mismatch. Once mounted, the
+  full app renders from the now-stable rehydrated persisted state.
+- This is the correct pattern for a highly-interactive, persisted-state client
+  app — SSR provides no SEO/indexing benefit for the builder canvas itself,
+  and the skeleton avoids the flash-of-corrected-content that the "recover"
+  fallback would otherwise show.
+
+Verification:
+- `bun run lint` -> 0 errors, 0 warnings.
+- Agent Browser: opened / fresh, checked `agent-browser errors` (empty) and
+  `agent-browser console | grep hydration` (empty) — no hydration errors,
+  no recoverable errors, no runtime errors.
+- App still fully interactive: TopBar modes, block palette, canvas with 5
+  default blocks, Footer showing "5 blocks | Mode: Dragdrop | E-E-A-T: 50/100
+  | SEO: 65/100" from the rehydrated persisted state.
+
+Stage Summary:
+- Hydration error eliminated. The builder now mounts cleanly: skeleton during
+  SSR → full app after client mount + state rehydration, with zero markup
+  divergence.
